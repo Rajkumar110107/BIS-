@@ -2,7 +2,7 @@ import json
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
-import faiss
+
 
 class HybridRetriever:
     def __init__(self, corpus_path):
@@ -10,42 +10,34 @@ class HybridRetriever:
             self.data = json.load(f)
 
         self.texts = [d["text"] for d in self.data]
-        self.codes = [d["codes"] for d in self.data]
-
-        # Dense embeddings
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        self.embeddings = self.model.encode(self.texts, show_progress_bar=True)
-
-        self.index = faiss.IndexFlatL2(self.embeddings.shape[1])
-        self.index.add(np.array(self.embeddings))
 
         # BM25
         tokenized = [t.lower().split() for t in self.texts]
         self.bm25 = BM25Okapi(tokenized)
 
-    def search(self, query, top_k=20):
-        # Dense search
-        q_emb = self.model.encode([query])
-        D, I = self.index.search(np.array(q_emb), top_k)
+        # Embedding model
+        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embeddings = self.model.encode(self.texts)
 
-        dense_results = [self.data[i] for i in I[0]]
+    def search(self, query, top_k=10):
+        # BM25 scores
+        bm25_scores = self.bm25.get_scores(query.lower().split())
 
-        # BM25 search
-        tokenized_query = query.lower().split()
-        bm25_scores = self.bm25.get_scores(tokenized_query)
-        bm25_indices = np.argsort(bm25_scores)[::-1][:top_k]
+        # Embedding scores
+        q_emb = self.model.encode([query])[0]
+        emb_scores = np.dot(self.embeddings, q_emb)
 
-        bm25_results = [self.data[i] for i in bm25_indices]
+        # Combine
+        final_scores = 0.5 * bm25_scores + 0.5 * emb_scores
 
-        # Combine (simple fusion)
-        combined = dense_results + bm25_results
+        idxs = np.argsort(final_scores)[::-1][:top_k]
 
-        # Remove duplicates (based on text)
-        seen = set()
-        unique_results = []
-        for item in combined:
-            if item["text"] not in seen:
-                seen.add(item["text"])
-                unique_results.append(item)
+        results = []
+        for i in idxs:
+            results.append({
+                "text": self.texts[i],
+                "codes": self.data[i]["codes"],
+                "score": float(final_scores[i])
+            })
 
-        return unique_results[:top_k]
+        return results

@@ -1,0 +1,8 @@
+pdfplumber
+sentence-transformers
+faiss-cpu
+rank-bm25
+numpy
+scikit-learn
+torch
+transformers
